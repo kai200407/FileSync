@@ -4,11 +4,15 @@
 #include <openssl/sha.h>
 #include <vector>
 #include <iostream>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 namespace fs = std::filesystem;
 
 FileSync::FileSync(const std::string& src, const std::string& dst)
-    : srcDir(src), dstDir(dst) {}
+    : srcDir(src), dstDir(dst) {
+    spdlog::set_default_logger(spdlog::basic_logger_mt("sync_logger", "sync.log"));
+}
 
 FileStateMap FileSync::collectFileState(const std::string& root) {
     FileStateMap state;
@@ -58,6 +62,22 @@ void FileSync::makeDir(const std::string& path) {
     fs::create_directories(path);
 }
 
+void FileSync::logInfo(const std::string& msg) {
+    std::lock_guard<std::mutex> lock(mtx);
+    spdlog::info(msg);
+}
+void FileSync::logError(const std::string& msg) {
+    std::lock_guard<std::mutex> lock(mtx);
+    spdlog::error(msg);
+}
+void FileSync::setConflictCallback(std::function<void(const std::string&)> cb) {
+    conflictCallback = cb;
+}
+void FileSync::handleConflict(const std::string& path) {
+    logError("冲突: " + path);
+    if (conflictCallback) conflictCallback(path);
+}
+
 void FileSync::sync() {
     auto srcState = collectFileState(srcDir);
     auto dstState = collectFileState(dstDir);
@@ -75,7 +95,7 @@ void FileSync::sync() {
         }
         if (needCopy) {
             copyFile(fs::path(srcDir) / relPath, dstPath);
-            std::cout << "复制: " << relPath << std::endl;
+            logInfo("复制: " + relPath);
         }
     }
     // 删除
@@ -83,7 +103,46 @@ void FileSync::sync() {
         if (srcState.find(relPath) == srcState.end()) {
             auto dstPath = fs::path(dstDir) / relPath;
             removeFile(dstPath);
-            std::cout << "删除: " << relPath << std::endl;
+            logInfo("删除: " + relPath);
+        }
+    }
+}
+
+void FileSync::syncBidirectional() {
+    auto srcState = collectFileState(srcDir);
+    auto dstState = collectFileState(dstDir);
+    // 合并所有路径
+    std::unordered_map<std::string, int> allPaths;
+    for (const auto& [p, _] : srcState) allPaths[p] = 1;
+    for (const auto& [p, _] : dstState) allPaths[p] |= 2;
+    for (const auto& [relPath, flag] : allPaths) {
+        auto srcIt = srcState.find(relPath);
+        auto dstIt = dstState.find(relPath);
+        bool inSrc = srcIt != srcState.end();
+        bool inDst = dstIt != dstState.end();
+        if (inSrc && inDst) {
+            // 冲突检测：都被修改（可用时间戳或哈希）
+            if (srcIt->second.size != dstIt->second.size || srcIt->second.last_write != dstIt->second.last_write) {
+                // 时间戳优先策略
+                if (srcIt->second.last_write > dstIt->second.last_write) {
+                    copyFile(fs::path(srcDir) / relPath, fs::path(dstDir) / relPath);
+                    logInfo("A->B 更新: " + relPath);
+                } else if (srcIt->second.last_write < dstIt->second.last_write) {
+                    copyFile(fs::path(dstDir) / relPath, fs::path(srcDir) / relPath);
+                    logInfo("B->A 更新: " + relPath);
+                } else {
+                    // 冲突（同一时间戳但内容不同）
+                    handleConflict(relPath);
+                }
+            }
+        } else if (inSrc && !inDst) {
+            // 只在A
+            copyFile(fs::path(srcDir) / relPath, fs::path(dstDir) / relPath);
+            logInfo("A->B 新增: " + relPath);
+        } else if (!inSrc && inDst) {
+            // 只在B
+            copyFile(fs::path(dstDir) / relPath, fs::path(srcDir) / relPath);
+            logInfo("B->A 新增: " + relPath);
         }
     }
 } 

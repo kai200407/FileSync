@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>文件同步工具</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h2>文件同步工具</h2>
+    <div class="dir-select">
+      <div>
+        <h3>源目录</h3>
+        <div id="src-dir-tree" class="dir-tree"></div>
+      </div>
+      <div>
+        <h3>目标目录</h3>
+        <div id="dst-dir-tree" class="dir-tree"></div>
+      </div>
+    </div>
+    <button id="sync-btn">开始同步</button>
+    <div id="status"></div>
+    <h3>日志</h3>
+    <pre id="logs"></pre>
+    <h3>冲突</h3>
+    <div id="conflicts"></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html> 
